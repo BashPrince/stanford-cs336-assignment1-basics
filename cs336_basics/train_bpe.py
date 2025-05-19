@@ -1,10 +1,11 @@
+import os
 import regex
 from multiprocessing import Pool
 from itertools import repeat
-import psutil
 from .pretokenization_example import find_chunk_boundaries
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+NUM_BYTE_CHARS = 256
 
 class TokenNode:
     def __init__(self, token: bytes | None = None, multiplier: int | None = None):
@@ -12,6 +13,13 @@ class TokenNode:
         self.multiplier: int | None = multiplier
         self.prev: TokenNode | None = None
         self.next: TokenNode | None = None
+    
+    def __str__(self):
+        if self.next:
+            return f"({str(self.token)}, {self.multiplier}) -> {str(self.next)}"
+        
+        return f"({str(self.token)}, {self.multiplier})"
+
 
 class TokenPairInfo:
     def __init__(self, occurence: TokenNode):
@@ -21,6 +29,13 @@ class TokenPairInfo:
     def add_occurence(self, occurence: TokenNode):
         self.occurences.append(occurence)
         self.num_occurences += occurence.multiplier
+    
+    def remove_occurence(self, occurence: TokenNode) -> int:
+        self.occurences.remove(occurence)
+        old_num_occurences = self.num_occurences
+        self.num_occurences -= occurence.multiplier
+
+        return old_num_occurences
 
 
 def pre_tokenize(corpus: str, special_tokens: list[str]) -> dict[str, int]:
@@ -48,19 +63,6 @@ def merge_pair(pair: tuple[bytes, bytes]) -> bytes:
 
     return pair[0] + pair[1]
 
-def adjust_adjacent_pair_count(
-        adjacent_pair: tuple[bytes, bytes],
-        adjacent_occurence: TokenNode,
-        token_pairs: dict[tuple[bytes, bytes], TokenPairInfo]) -> int:
-
-        # a, b, c -> a, bc thus we need to adjust the counts for the pair (a, b)
-        # similar for a, b, c -> ab, c
-        adjacent_pair_info = token_pairs[adjacent_pair]
-        old_num_occurences = adjacent_pair_info.num_occurences
-        adjacent_pair_info.num_occurences -= adjacent_occurence.multiplier
-
-        return old_num_occurences
-
 def merge_node(
         node: TokenNode,
         token_pairs: dict[tuple[bytes, bytes], TokenPairInfo]) -> dict[tuple[bytes, bytes], int]:
@@ -69,18 +71,11 @@ def merge_node(
 
     if node.prev.token:
         prev_pair = (node.prev.token, node.token)
-        old_num_occurences = adjust_adjacent_pair_count(
-            adjacent_pair=prev_pair,
-            adjacent_occurence=node.prev,
-            token_pairs=token_pairs)
-        changed_pair_counts[prev_pair] = old_num_occurences
+        changed_pair_counts[prev_pair] = token_pairs[prev_pair].remove_occurence(node.prev)
 
     if node.next.next.token:
         next_pair = (node.next.token, node.next.next.token)
-        old_num_occurences = adjust_adjacent_pair_count(
-            adjacent_pair=(node.next.token, node.next.next.token),
-            adjacent_occurence=node.next,
-            token_pairs=token_pairs)
+        old_num_occurences = token_pairs[next_pair].remove_occurence(node.next)
         
         if next_pair not in changed_pair_counts:
             changed_pair_counts[next_pair] = old_num_occurences
@@ -114,6 +109,17 @@ def merge_node(
     
     return changed_pair_counts
 
+def get_pre_token_by_occurence(occurence: TokenNode) -> tuple[bytes]:
+    while occurence.prev.token is not None:
+        occurence = occurence.prev
+    
+    pre_token = [occurence.token]
+
+    while occurence.next.token is not None:
+        occurence = occurence.next
+        pre_token.append(occurence.token)
+    
+    return tuple(pre_token)
 
 def merge(
         token_pairs: dict[tuple[bytes, bytes], TokenPairInfo],
@@ -122,9 +128,7 @@ def merge(
     # Create num_merges new tokens by merging the most frequent token pairs
     merge_sequence = []
 
-    for i in range(num_merges):
-        if (i % 100 == 0):
-            print(i)
+    for _ in range(num_merges):
         # Exit if no more pairs can be merged
         if not cnt_to_pairs:
             break
@@ -136,6 +140,7 @@ def merge(
         max_pair = cnt_to_pairs[max_cnt][0]
         pair_info = token_pairs[max_pair]
 
+
         # Keep track of which pair counts need to be updated after merging a token
         changed_pair_counts = set()
         # Iterate over this pair's occurences
@@ -146,13 +151,13 @@ def merge(
 
             new_changed_pair_counts = merge_node(node=node, token_pairs=token_pairs)
 
-            for changed_pair, count in new_changed_pair_counts.items():
+            for changed_pair, old_count in new_changed_pair_counts.items():
                 # If this pair count change has not yet occured, remove it from the count dict
-                if count and changed_pair not in changed_pair_counts:
-                    if len(cnt_to_pairs[count]) == 1:
-                        cnt_to_pairs.pop(count)
+                if old_count and changed_pair not in changed_pair_counts:
+                    if len(cnt_to_pairs[old_count]) == 1:
+                        cnt_to_pairs.pop(old_count)
                     else:
-                        cnt_to_pairs[count].remove(changed_pair)
+                        cnt_to_pairs[old_count].remove(changed_pair)
 
             changed_pair_counts = changed_pair_counts.union(new_changed_pair_counts.keys())
         
@@ -170,8 +175,8 @@ def merge(
                 cnt_to_pairs[changed_pair_info.num_occurences] = [changed_pair]
         
         # Re-sort
-        for count in resort_required:
-            cnt_to_pairs[count].sort(key=merge_pair, reverse=True)
+        for old_count in resort_required:
+            cnt_to_pairs[old_count].sort(reverse=True)
 
         # Remove pair and add to completed merges
         removed_info = token_pairs.pop(max_pair)
@@ -179,12 +184,18 @@ def merge(
             cnt_to_pairs.pop(removed_info.num_occurences)
         else:
             cnt_to_pairs[removed_info.num_occurences].remove(max_pair)
+
         merge_sequence.append(max_pair)
     
     return merge_sequence
 
 
-def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], num_processes: int = None) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+def train_bpe(
+        input_path: str | os.PathLike,
+        vocab_size: int,
+        special_tokens: list[str],
+        num_processes: int = None) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    
     pool = Pool(num_processes)
 
     with open(input_path, "rb") as f:
@@ -262,13 +273,155 @@ def train_bpe(input_path: str, vocab_size: int, special_tokens: list[str], num_p
                 cnt_to_pairs[pair_info.num_occurences].append(pair)
             else:
                 cnt_to_pairs[pair_info.num_occurences] = [pair]
-        
+            
         # Sort token pairs in cnt_to_pairs lexicographically
         for token_pair_list in cnt_to_pairs.values():
-            token_pair_list.sort(key=merge_pair, reverse=True)
+            token_pair_list.sort(reverse=True)
         
-        current_node = token_linked_list_start.prev
-        
-        merge_sequence = merge(token_pairs=token_pairs, cnt_to_pairs=cnt_to_pairs, num_merges=vocab_size - len(special_tokens) - 256)
+        num_merges = vocab_size - len(special_tokens) - NUM_BYTE_CHARS
 
-        print(len(merge_sequence))
+        merge_sequence = merge(token_pairs=token_pairs, cnt_to_pairs=cnt_to_pairs, num_merges=num_merges)
+
+        vocab = {i: token.encode("utf-8") for i, token in enumerate(special_tokens)}
+        num_tokens = len(vocab)
+        vocab |= {num_tokens + i: bytes([i]) for i in range(NUM_BYTE_CHARS)}
+        num_tokens = len(vocab)
+        
+        for i, pair in enumerate(merge_sequence):
+            vocab[num_tokens + i] = merge_pair(pair)
+
+        return vocab, merge_sequence
+    
+def merge_naive(pre_tokens: list[tuple[list[bytes], int]], num_merges: int):
+    """Iterator that returns the next merge and the token pair counts after each step"""
+
+    # Perform merges
+    for _ in range(num_merges):
+        pairs = {}
+        max_pair = None
+        max_count = 0
+        pre_tokens_merged = []
+
+        # Find the most often occuring pair
+        for pt, pt_count in pre_tokens:
+            # Iterate over pre-token tokens pairwise
+            for t1, t2 in zip(pt[:-1], pt[1:]):
+                pair = (t1, t2)
+                pair_count = pairs.get(pair, 0)
+                new_count = pair_count + pt_count
+                pairs[pair] = new_count
+
+                if (new_count > max_count or max_pair is None) or (new_count == max_count and pair > max_pair):
+                    max_count = new_count
+                    max_pair = pair
+        
+        # If no new max pair was found finish
+        if max_pair is None:
+            break
+
+        yield max_pair, pairs
+        
+        # Merge the most often occuring pair
+        for pt, pt_count in pre_tokens:
+            pre_token_merged = []
+
+            skip = False
+            for prev_t, t1, t2, next_t in zip(([None] + pt)[:-2], pt[:-1], pt[1:], (pt + [None])[2:]):
+                if skip:
+                    skip = False
+                    if next_t is None:
+                        pre_token_merged.append(t2)
+
+                    continue
+
+                pair = (t1, t2)
+                merged_pair = merge_pair(pair)
+
+                if pair == max_pair:
+                    if prev_t:
+                        prev_pair = (prev_t, t1)
+                        pairs[prev_pair] -= pt_count
+
+                        if pairs[prev_pair] == 0:
+                            pairs.pop(prev_pair)
+
+                        new_pair = (prev_t, merged_pair)
+
+                        if new_pair in pairs:
+                            pairs[new_pair] += pt_count
+                        else:
+                            pairs[new_pair] = pt_count
+
+                    if next_t:
+                        next_pair = (t2, next_t)
+                        pairs[next_pair] -= pt_count
+
+                        if pairs[next_pair] == 0:
+                            pairs.pop(next_pair)
+
+                        new_pair = (merged_pair, next_t)
+
+                        if new_pair in pairs:
+                            pairs[new_pair] += pt_count
+                        else:
+                            pairs[new_pair] = pt_count
+                    
+                    pre_token_merged.append(merged_pair)
+                    skip = True
+                else:
+                    pre_token_merged.append(t1)
+
+                    if next_t is None:
+                        pre_token_merged.append(t2)
+
+            if len(pre_token_merged) > 1:
+                pre_tokens_merged.append((pre_token_merged, pt_count))
+        
+        pre_tokens = pre_tokens_merged
+
+def train_bpe_naive(
+        input_path: str | os.PathLike,
+        vocab_size: int,
+        special_tokens: list[str],
+        num_processes: int = None) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
+    
+    pool = Pool(num_processes)
+
+    with open(input_path, "rb") as f:
+        # Prepare the chunks
+        boundaries = find_chunk_boundaries(f, pool._processes, "<|endoftext|>".encode("utf-8"))
+        chunks = []
+
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            f.seek(start)
+            chunks.append(f.read(end - start).decode("utf-8", errors="ignore"))
+        
+        # Run pre-tokenization on all chunks and store the chunk counts for each pre-token
+        chunk_pre_tokens_list = pool.starmap(pre_tokenize, zip(chunks, repeat(special_tokens)))
+        
+        # Merge all chunk pre-tokens and counts into one dict
+        pre_tokens = chunk_pre_tokens_list[0]
+
+        if len(chunk_pre_tokens_list) > 1:
+            for chunk_pre_tokens in chunk_pre_tokens_list[1:]:
+                for pre_token, count in chunk_pre_tokens.items():
+                    if pre_token in pre_tokens:
+                        pre_tokens[pre_token] += count
+                    else:
+                        pre_tokens[pre_token] = count
+        
+        pre_tokens = [(pt.encode("utf-8"), count) for pt, count in pre_tokens.items()]
+        pre_tokens = [([pt[i:i+1] for i in range(len(pt))], count) for pt, count in pre_tokens if len(pt) > 1]
+
+    merge_itr = merge_naive(pre_tokens=pre_tokens, num_merges=vocab_size - len(special_tokens) - NUM_BYTE_CHARS)
+    merge_sequence = [m for m, _ in merge_itr]
+            
+    vocab = {i: token.encode("utf-8") for i, token in enumerate(special_tokens)}
+    num_tokens = len(vocab)
+    vocab |= {num_tokens + i: bytes([i]) for i in range(NUM_BYTE_CHARS)}
+    num_tokens = len(vocab)
+    
+    for i, pair in enumerate(merge_sequence):
+        vocab[num_tokens + i] = merge_pair(pair)
+
+    return vocab, merge_sequence
