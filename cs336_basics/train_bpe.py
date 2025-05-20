@@ -2,6 +2,7 @@ import os
 import regex
 from multiprocessing import Pool
 from itertools import repeat
+from tqdm import tqdm
 from .pretokenization_example import find_chunk_boundaries
 
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
@@ -128,7 +129,7 @@ def merge(
     # Create num_merges new tokens by merging the most frequent token pairs
     merge_sequence = []
 
-    for _ in range(num_merges):
+    for _ in tqdm(range(num_merges)):
         # Exit if no more pairs can be merged
         if not cnt_to_pairs:
             break
