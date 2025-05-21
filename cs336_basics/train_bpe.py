@@ -32,7 +32,7 @@ class TokenPairInfo:
         self.num_occurences += occurence.multiplier
     
     def decrease_occurence_count(self, occurence: TokenNode) -> int:
-        # Only decrement the count, management of removing invalid occurences is done by caller
+        # Only decrement the count no need to remove the occurence since it is marked as invalid
         old_num_occurences = self.num_occurences
         self.num_occurences -= occurence.multiplier
 
@@ -131,8 +131,6 @@ def merge(
 
         # Keep track of which pair counts need to be updated after merging a token
         changed_pair_counts = set()
-        # Keep track of which occurences are still valid
-        updated_occurences = []
         # Iterate over this pair's occurences
         for node in pair_info.occurences:
             if not node.token or (node.token, node.next.token) != max_pair:
@@ -140,7 +138,6 @@ def merge(
                 # If this is the case the node is skipped.
                 continue
 
-            updated_occurences.append(node)
             new_changed_pair_counts = merge_node(node=node, token_pairs=token_pairs)
 
             for changed_pair, old_count in new_changed_pair_counts.items():
@@ -153,9 +150,6 @@ def merge(
 
             changed_pair_counts = changed_pair_counts.union(new_changed_pair_counts.keys())
         
-        # Update valid occurences
-        pair_info.occurences = updated_occurences
-
         # Adjust the pair counts
         for changed_pair in changed_pair_counts:
             changed_pair_info = token_pairs[changed_pair]
