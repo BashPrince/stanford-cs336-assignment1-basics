@@ -134,10 +134,8 @@ def merge(
         if not cnt_to_pairs:
             break
 
-        counts_sorted = list(cnt_to_pairs.keys())
-        counts_sorted.sort(reverse=True)
         # Get the max occurence count
-        max_cnt = counts_sorted[0]
+        max_cnt = max(cnt_to_pairs.keys())
         # Get the lexicographically greatest of all pairs sharing the max count
         max_pair = max(cnt_to_pairs[max_cnt])
         pair_info = token_pairs[max_pair]
