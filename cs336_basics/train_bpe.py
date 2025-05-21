@@ -124,7 +124,7 @@ def get_pre_token_by_occurence(occurence: TokenNode) -> tuple[bytes]:
 
 def merge(
         token_pairs: dict[tuple[bytes, bytes], TokenPairInfo],
-        cnt_to_pairs: dict[int, list[tuple[bytes, bytes]]],
+        cnt_to_pairs: dict[int, set[tuple[bytes, bytes]]],
         num_merges: int) -> list[tuple[bytes, bytes]]:
     # Create num_merges new tokens by merging the most frequent token pairs
     merge_sequence = []
@@ -136,9 +136,10 @@ def merge(
 
         counts_sorted = list(cnt_to_pairs.keys())
         counts_sorted.sort(reverse=True)
-        # Get the first (=lexicographically greatest) pair of all pairs sharing the highest occurence count
+        # Get the max occurence count
         max_cnt = counts_sorted[0]
-        max_pair = cnt_to_pairs[max_cnt][0]
+        # Get the lexicographically greatest of all pairs sharing the max count
+        max_pair = max(cnt_to_pairs[max_cnt])
         pair_info = token_pairs[max_pair]
 
 
@@ -163,22 +164,16 @@ def merge(
             changed_pair_counts = changed_pair_counts.union(new_changed_pair_counts.keys())
         
         # Adjust the pair counts
-        resort_required = []
         for changed_pair in changed_pair_counts:
             changed_pair_info = token_pairs[changed_pair]
 
             if changed_pair_info.num_occurences == 0:
                 token_pairs.pop(changed_pair)
             elif changed_pair_info.num_occurences in cnt_to_pairs:
-                cnt_to_pairs[changed_pair_info.num_occurences].append(changed_pair)
-                resort_required.append(changed_pair_info.num_occurences)
+                cnt_to_pairs[changed_pair_info.num_occurences].add(changed_pair)
             else:
-                cnt_to_pairs[changed_pair_info.num_occurences] = [changed_pair]
+                cnt_to_pairs[changed_pair_info.num_occurences] = {changed_pair}
         
-        # Re-sort
-        for old_count in resort_required:
-            cnt_to_pairs[old_count].sort(reverse=True)
-
         # Remove pair and add to completed merges
         removed_info = token_pairs.pop(max_pair)
         if len(cnt_to_pairs[removed_info.num_occurences]) == 1:
@@ -189,7 +184,6 @@ def merge(
         merge_sequence.append(max_pair)
     
     return merge_sequence
-
 
 def train_bpe(
         input_path: str | os.PathLike,
@@ -266,18 +260,14 @@ def train_bpe(
                 current_node = current_node.next.next
         
         # Build a dict from counts to pairs
-        cnt_to_pairs: dict[int, list[tuple[bytes, bytes]]] = {}
+        cnt_to_pairs: dict[int, set[tuple[bytes, bytes]]] = {}
         current_node = token_linked_list_start
 
         for pair, pair_info in token_pairs.items():
             if pair_info.num_occurences in cnt_to_pairs:
-                cnt_to_pairs[pair_info.num_occurences].append(pair)
+                cnt_to_pairs[pair_info.num_occurences].add(pair)
             else:
-                cnt_to_pairs[pair_info.num_occurences] = [pair]
-            
-        # Sort token pairs in cnt_to_pairs lexicographically
-        for token_pair_list in cnt_to_pairs.values():
-            token_pair_list.sort(reverse=True)
+                cnt_to_pairs[pair_info.num_occurences] = {pair}
         
         num_merges = vocab_size - len(special_tokens) - NUM_BYTE_CHARS
 
