@@ -39,11 +39,8 @@ if __name__ == '__main__':
 
         duration_sec = end_time - start_time
 
-    with open(args.input, errors="replace") as f:
-        content_encoded = f.read().encode("utf-8")
-
-    compression_ratio = len(content_encoded) / len(encoded_ids)
-    throughput_mb = len(content_encoded) / (duration_sec * 1024**2)
+    compression_ratio = file_size / len(encoded_ids)
+    throughput_mb = file_size / (duration_sec * 1024**2)
 
     print(f"Compression ratio (bytes/tokens): {compression_ratio}")
     print(f"Throughput (MB/sec): {throughput_mb}")
