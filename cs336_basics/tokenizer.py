@@ -1,6 +1,7 @@
 import pickle
 import regex
 from typing import Iterable, Iterator
+import functools
 from .pretokenization_example import PAT
 
 class Tokenizer:
@@ -92,6 +93,24 @@ class Tokenizer:
             merge_applied_pre_token.append(pre_token[-1])
         
         return tuple(merge_applied_pre_token)
+    
+    @functools.lru_cache(maxsize=65536, typed=False)
+    def _merge_pre_token(self, pre_token: tuple[bytes]) -> tuple[bytes]:
+        # Return single byte and empty pre-tokens unchanged
+        if len(pre_token) <= 1:
+            return pre_token
+
+        merge_pos = 0
+
+        while True:
+            next_merge, merge_pos = self._find_next_merge(pre_token, merge_pos)
+
+            if next_merge is None:
+                break
+
+            pre_token = self._apply_merge(pre_token, next_merge)
+        
+        return pre_token
 
     def encode(self, text: str) -> list[int]:
         # Split the text into sequences of non-special token text and special tokens
@@ -146,22 +165,7 @@ class Tokenizer:
             split_merged_pre_tokens = []
 
             for pre_token in split:
-                # Append single byte tokens and empty pre-tokens and continue with next pre-token
-                if len(pre_token) <= 1:
-                    split_merged_pre_tokens.append(pre_token)
-                    continue
-
-                merge_pos = 0
-
-                while True:
-                    next_merge, merge_pos = self._find_next_merge(pre_token, merge_pos)
-
-                    if next_merge is None:
-                        break
-
-                    pre_token = self._apply_merge(pre_token, next_merge)
-                
-                split_merged_pre_tokens.append(pre_token)
+                split_merged_pre_tokens.append(self._merge_pre_token(pre_token))
             
             merged_pre_token_seq_seq.append(split_merged_pre_tokens)
 

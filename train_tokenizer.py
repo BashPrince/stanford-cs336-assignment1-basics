@@ -6,7 +6,7 @@ from cs336_basics.train_bpe import train_bpe
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
                     prog='Tokenizer Training',
-                    description='Tokenize an input file and store the vocab and merges to disk')
+                    description='Train a tokenizer on an input file and store the vocab and merges to disk')
     parser.add_argument("--corpus", required=True, type=str)
     parser.add_argument("--vocab_size", required=True, type=int)
     parser.add_argument("--num_processes", default=None, type=int)
