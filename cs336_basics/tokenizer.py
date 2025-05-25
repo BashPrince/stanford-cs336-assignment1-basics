@@ -12,7 +12,6 @@ class Tokenizer:
         
         self.vocab = vocab
         self.inverted_vocab = {v: k for k, v in vocab.items()}
-        self.merges = merges
         self.special_tokens = special_tokens
         self.special_token_regex = None
 
@@ -21,6 +20,9 @@ class Tokenizer:
             special_tokens_sorted = sorted(special_tokens, key=len, reverse=True)
             special_tokens_sorted = [regex.escape(t) for t in special_tokens_sorted]
             self.special_token_regex = "|".join(special_tokens_sorted)
+        
+        # Build a dict of merges with their occurence order as values
+        self.merges = {m: i for i, m in enumerate(merges)}
 
     @classmethod
     def from_files(
@@ -36,6 +38,60 @@ class Tokenizer:
             merges = pickle.load(file)
         
         return cls(vocab, merges, special_tokens)
+    
+    def _find_next_merge(self, pre_token: tuple[bytes], start: int) -> tuple[tuple[bytes] | None, int | None]:
+        '''Return the next applicable merge and its position from the start position of merges'''
+
+        if len(pre_token) == 1:
+            # Token is fully merged
+            return None, None
+        
+        lowest_merge = None
+        lowest_position = None
+
+        # Iterate token pairs
+        for t1, t2 in zip(pre_token[:-1], pre_token[1:]):
+            pair = (t1, t2)
+
+            # Check if the pair is a valid merge
+            if pair in self.merges:
+                position = self.merges[pair]
+
+                # Skip if the merge lies before the start position
+                if position < start:
+                    continue
+
+                # If this is the first merge or it occurs before the previously found lowest merge, save it
+                if lowest_merge is None or position < lowest_position:
+                    lowest_merge = pair
+                    lowest_position = position
+        
+        return lowest_merge, lowest_position
+    
+    def _apply_merge(self, pre_token: tuple[bytes], merge: tuple[bytes]) -> tuple[bytes]:
+        '''Apply all occurrences of the merge to the pre-token in order of appearance'''
+
+        merge_applied_pre_token = []
+        skip = False
+
+        for t1, t2 in zip(pre_token[:-1], pre_token[1:]):
+            if skip:
+                skip = False
+                continue
+
+            if (t1, t2) == merge:
+                # Append the merge and skip the next token
+                merge_applied_pre_token.append(t1 + t2)
+                skip = True
+            else:
+                # Append unmerged token
+                merge_applied_pre_token.append(t1)
+        
+        if not skip:
+            # The last pair did not get merged so we need to append the trailing bytes
+            merge_applied_pre_token.append(pre_token[-1])
+        
+        return tuple(merge_applied_pre_token)
 
     def encode(self, text: str) -> list[int]:
         # Split the text into sequences of non-special token text and special tokens
@@ -94,34 +150,16 @@ class Tokenizer:
                 if len(pre_token) <= 1:
                     split_merged_pre_tokens.append(pre_token)
                     continue
-                
-                # Iterate over merges and apply them if present
-                for merge in self.merges:
-                    merge_applied_pre_token = []
-                    skip = False
 
-                    for t1, t2 in zip(pre_token[:-1], pre_token[1:]):
-                        if skip:
-                            skip = False
-                            continue
+                merge_pos = 0
 
-                        if (t1, t2) == merge:
-                            # Append the merge and skip the next token
-                            merge_applied_pre_token.append(t1 + t2)
-                            skip = True
-                        else:
-                            # Append unmerged token
-                            merge_applied_pre_token.append(t1)
-                    
-                    if not skip:
-                        # The last pair did not get merged so we need to append the trailing bytes
-                        merge_applied_pre_token.append(pre_token[-1])
-                    
-                    pre_token = tuple(merge_applied_pre_token)
+                while True:
+                    next_merge, merge_pos = self._find_next_merge(pre_token, merge_pos)
 
-                    if len(pre_token) == 1:
-                        # Exit merge loop if the pre-token is fully merged
+                    if next_merge is None:
                         break
+
+                    pre_token = self._apply_merge(pre_token, next_merge)
                 
                 split_merged_pre_tokens.append(pre_token)
             
