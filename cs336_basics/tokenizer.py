@@ -2,6 +2,7 @@ import pickle
 import regex
 from typing import Iterable, Iterator
 import functools
+from tqdm import tqdm
 from .pretokenization_example import PAT
 
 class Tokenizer:
@@ -198,13 +199,21 @@ class Tokenizer:
         return int_seq
         
 
-    def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
+    def encode_iterable(self, iterable: Iterable[str], file_size: int | None = None) -> Iterator[int]:
         def encode_iterator(iterable: Iterable[str]) -> Iterator[int]:
+            prog_bar = tqdm(total=file_size) if file_size else None
+
             for text in iterable:
                 token_ints = self.encode(text)
 
+                if prog_bar:
+                    prog_bar.update(len(text.encode("utf-8")))
+
                 for i in token_ints:
                     yield i
+            
+            if prog_bar:
+                prog_bar.close()
         
         return encode_iterator(iterable)
 
