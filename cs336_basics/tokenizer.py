@@ -200,22 +200,19 @@ class Tokenizer:
         
 
     def encode_iterable(self, iterable: Iterable[str], file_size: int | None = None) -> Iterator[int]:
-        def encode_iterator(iterable: Iterable[str], file_size: int | None = None) -> Iterator[int]:
-            prog_bar = tqdm(total=file_size) if file_size else None
+        prog_bar = tqdm(total=file_size) if file_size else None
 
-            for text in iterable:
-                token_ints = self.encode(text)
+        for text in iterable:
+            token_ints = self.encode(text)
 
-                if prog_bar:
-                    prog_bar.update(len(text.encode("utf-8")))
-
-                for i in token_ints:
-                    yield i
-            
             if prog_bar:
-                prog_bar.close()
+                prog_bar.update(len(text.encode("utf-8")))
+
+            for i in token_ints:
+                yield i
         
-        return encode_iterator(iterable, file_size)
+        if prog_bar:
+            prog_bar.close()
 
     def decode(self, ids: list[int]) -> str:
         concat_bytes = b''
