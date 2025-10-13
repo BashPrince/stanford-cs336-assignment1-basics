@@ -10,6 +10,7 @@ import torch
 from torch import Tensor
 from cs336_basics.train_bpe import train_bpe
 from cs336_basics.tokenizer import Tokenizer
+from cs336_basics import nn
 
 
 
@@ -32,7 +33,10 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    raise NotImplementedError
+    linear = nn.Linear(d_in, d_out, device=weights.device, dtype=weights.dtype)
+    linear.load_state_dict({"W": weights})
+
+    return linear(in_features)
 
 
 def run_embedding(
@@ -54,7 +58,10 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    raise NotImplementedError
+    embeddings = nn.Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=weights.device, dtype=weights.dtype)
+    embeddings.load_state_dict({"embeddings": weights})
+
+    return embeddings(token_ids)
 
 
 def run_swiglu(
@@ -86,7 +93,12 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+    swiglu = nn.SwiGLU(d_model=d_model, d_ff=d_ff, device=w1_weight.device, dtype=w1_weight.dtype)
+    swiglu.W1.load_state_dict({"W": w1_weight})
+    swiglu.W2.load_state_dict({"W": w2_weight})
+    swiglu.W3.load_state_dict({"W": w3_weight})
+
+    return swiglu(in_features)
 
 
 def run_scaled_dot_product_attention(
@@ -381,7 +393,10 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+    rms_norm = nn.RMSNorm(d_model=d_model, eps=eps, device=weights.device, dtype=weights.dtype)
+    rms_norm.load_state_dict({"g": weights})
+
+    return rms_norm(in_features)
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
@@ -395,7 +410,9 @@ def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
         Float[Tensor,"..."]: of with the same shape as `in_features` with the output of applying
         SiLU to each element.
     """
-    raise NotImplementedError
+    silu = nn.SiLU()
+
+    return silu(in_features)
 
 
 def run_get_batch(
