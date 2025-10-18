@@ -119,7 +119,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return nn.scaled_dot_product_attention(Q=Q, K=K, V=V, mask=mask)
 
 
 def run_multihead_self_attention(
@@ -153,7 +153,17 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    attn = nn.SelfAttention(d_model=d_model, num_heads=num_heads, dtype=q_proj_weight.dtype, device=q_proj_weight.device)
+    attn.load_state_dict(
+        {
+            "W_q": q_proj_weight,
+            "W_k": k_proj_weight,
+            "W_v": v_proj_weight,
+            "W_o": o_proj_weight,
+        }
+    )
+
+    return attn(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -193,7 +203,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    rope = nn.RotaryPositionalEmbedding(theta=theta, d_k=d_model//num_heads, max_seq_len=token_positions.shape[-1], device=q_proj_weight.device)
+    attn = nn.SelfAttention(d_model=d_model, num_heads=num_heads, rope=rope, dtype=q_proj_weight.dtype, device=q_proj_weight.device)
+    attn.load_state_dict(
+        {
+            "W_q": q_proj_weight,
+            "W_k": k_proj_weight,
+            "W_v": v_proj_weight,
+            "W_o": o_proj_weight,
+        }
+    )
+
+    return attn(in_features, token_positions)
 
 
 def run_rope(
@@ -215,7 +236,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    rope = nn.RotaryPositionalEmbedding(theta=theta, d_k=d_k, max_seq_len=max_seq_len, device=in_query_or_key.device)
+
+    return rope(in_query_or_key, token_positions)
 
 
 def run_transformer_block(
@@ -451,7 +474,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+    return nn.softmax(x=in_features, dim=dim)
 
 
 def run_cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
