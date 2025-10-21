@@ -311,7 +311,31 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    rope = nn.RotaryPositionalEmbedding(theta=theta, d_k=d_model//num_heads, max_seq_len=max_seq_len, device=None)
+    block = nn.TransformerBlock(
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope=rope,
+        device=None,
+        dtype=None
+        )
+    
+    renamed_weights = {
+        'pre_attention_norm.g': weights['ln1.weight'],
+        'pre_ffn_norm.g': weights['ln2.weight'],
+        'attention.W_q': weights['attn.q_proj.weight'],
+        'attention.W_k': weights['attn.k_proj.weight'],
+        'attention.W_v': weights['attn.v_proj.weight'],
+        'attention.W_o': weights['attn.output_proj.weight'],
+        'ffn.W1.W': weights['ffn.w1.weight'],
+        'ffn.W2.W': weights['ffn.w2.weight'],
+        'ffn.W3.W': weights['ffn.w3.weight'],
+    }
+
+    block.load_state_dict(renamed_weights)
+    
+    return block(in_features)
 
 
 def run_transformer_lm(
@@ -393,7 +417,41 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer = nn.Transformer(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        num_layers=num_layers,
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        rope_theta=rope_theta
+    )
+
+    # Pre- and post-block weights
+    renamed_weights = {
+        'sequential.0.embeddings': weights['token_embeddings.weight'],
+        'sequential.4.g': weights['ln_final.weight'],
+        'sequential.5.W': weights['lm_head.weight']
+    }
+
+    # Block weights
+    for l in range(num_layers):
+        block_weights = {
+            f'sequential.{l+1}.pre_attention_norm.g': weights[f'layers.{l}.ln1.weight'],
+            f'sequential.{l+1}.pre_ffn_norm.g': weights[f'layers.{l}.ln2.weight'],
+            f'sequential.{l+1}.attention.W_q': weights[f'layers.{l}.attn.q_proj.weight'],
+            f'sequential.{l+1}.attention.W_k': weights[f'layers.{l}.attn.k_proj.weight'],
+            f'sequential.{l+1}.attention.W_v': weights[f'layers.{l}.attn.v_proj.weight'],
+            f'sequential.{l+1}.attention.W_o': weights[f'layers.{l}.attn.output_proj.weight'],
+            f'sequential.{l+1}.ffn.W1.W': weights[f'layers.{l}.ffn.w1.weight'],
+            f'sequential.{l+1}.ffn.W2.W': weights[f'layers.{l}.ffn.w2.weight'],
+            f'sequential.{l+1}.ffn.W3.W': weights[f'layers.{l}.ffn.w3.weight'],
+        }
+        renamed_weights |= block_weights
+    
+    transformer.load_state_dict(renamed_weights)
+
+    return transformer(in_indices)
 
 
 def run_rmsnorm(

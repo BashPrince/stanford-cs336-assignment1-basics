@@ -79,11 +79,11 @@ class SwiGLU(torch.nn.Module):
         return self.W2(gated_silu)
 
 class RotaryPositionalEmbedding(torch.nn.Module):
-    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None, dtype=None):
         super().__init__()
         # Task description indicies start from 1 but tests only pass from 0
-        i = torch.arange(0, max_seq_len, device=device)
-        k = torch.arange(0, d_k//2, device=device)
+        i = torch.arange(0, max_seq_len, device=device, dtype=dtype)
+        k = torch.arange(0, d_k//2, device=device, dtype=dtype)
         inv_theta_k = 1 / (theta**((2*k)/d_k))
         theta_i_k = einsum(i, inv_theta_k, 'i, k -> i k') # outer product
         cos_theta_i_k = torch.cos(theta_i_k)
@@ -163,3 +163,43 @@ class SelfAttention(torch.nn.Module):
         attn_concat = rearrange(attn, '... h seq d_v -> ... seq (h d_v)')
 
         return einsum(self.W_o, attn_concat, 'd_out h_d_v, ... h_d_v -> ... d_out')
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, rope: RotaryPositionalEmbedding, device=None, dtype=None):
+        super().__init__()
+        self.pre_attention_norm = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.pre_ffn_norm = RMSNorm(d_model=d_model, device=device, dtype=dtype)
+        self.attention = SelfAttention(d_model=d_model, num_heads=num_heads, rope=rope, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model=d_model, d_ff=d_ff, device=device, dtype=dtype)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        token_positions = torch.arange(x.shape[-2]).to(x.device)
+        x = x + self.attention(self.pre_attention_norm(x), token_positions)
+
+        return x + self.ffn(self.pre_ffn_norm(x))
+
+class Transformer(torch.nn.Module):
+    def __init__(
+            self,
+            vocab_size: int,
+            context_length: int,
+            num_layers: int,
+            d_model: int,
+            num_heads: int,
+            d_ff: int,
+            rope_theta: float,
+            device=None,
+            dtype=None):
+        
+        super().__init__()
+        self.sequential = torch.nn.Sequential(Embedding(num_embeddings=vocab_size, embedding_dim=d_model, device=device, dtype=dtype))
+        rope = RotaryPositionalEmbedding(theta=rope_theta, d_k=d_model//num_heads, max_seq_len=context_length, device=device, dtype=dtype)
+
+        for _ in range(num_layers):
+            self.sequential.append(TransformerBlock(d_model=d_model, num_heads=num_heads, d_ff=d_ff, rope=rope, device=device, dtype=dtype))
+        
+        self.sequential.append(RMSNorm(d_model=d_model, device=device, dtype=dtype))
+        self.sequential.append(Linear(in_features=d_model, out_features=vocab_size, device=device, dtype=dtype))
+    
+    def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
+        return self.sequential(token_ids)
